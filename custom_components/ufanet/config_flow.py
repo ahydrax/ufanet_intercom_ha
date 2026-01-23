@@ -3,17 +3,18 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List
+from typing import TYPE_CHECKING, Any
 
 import voluptuous as vol
 from homeassistant import config_entries
-from homeassistant.data_entry_flow import FlowResult
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
-
 from homeassistant.helpers.storage import Store
 
 from .api import UfanetApiAuthError, UfanetApiClient, UfanetApiError
 from .const import CONF_CONTRACT, CONF_PASSWORD, DOMAIN
+
+if TYPE_CHECKING:
+    from homeassistant.data_entry_flow import FlowResult
 
 STORAGE_KEY = f"{DOMAIN}_credentials"
 STORAGE_VERSION = 1
@@ -26,7 +27,9 @@ class UfanetIntercomConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     VERSION = 1
 
-    async def async_step_user(self, user_input: dict[str, Any] | None = None) -> FlowResult:
+    async def async_step_user(  # noqa: PLR0912, PLR0915
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
         """Handle the initial step: ask for credentials and validate them."""
         errors: dict[str, str] = {}
 
@@ -41,13 +44,13 @@ class UfanetIntercomConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
             session = async_get_clientsession(self.hass)
             client = UfanetApiClient(session, contract, password=password)
-            
+
             # Store for saving token
             store = Store(self.hass, STORAGE_VERSION, STORAGE_KEY)
             stored_data = await store.async_load() or {}
             refresh_token = None
             token_exp = None
-            
+
             async def save_token(token: str, exp: int) -> None:
                 nonlocal refresh_token, token_exp
                 refresh_token = token
@@ -59,7 +62,7 @@ class UfanetIntercomConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 # Also save password for re-authentication if refresh token expires
                 stored_data[contract]["password"] = password
                 await store.async_save(stored_data)
-            
+
             try:
                 _LOGGER.debug("Requesting intercom list")
                 intercoms = await client.async_get_intercoms(on_token_update=save_token)
@@ -69,35 +72,39 @@ class UfanetIntercomConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     errors["base"] = "no_intercoms"
                 else:
                     # Save all intercoms as a list
-                    intercoms_data = [
-                        {
-                            "id": intercom.id,
-                            "name": intercom.role_name or intercom.string_view or intercom.custom_name or f"Intercom {intercom.id}",
-                        }
-                        for intercom in intercoms
-                    ]
-                    
-                    # Create entry with contract and intercoms (no password/token in entry.data)
+                    intercoms_data = []
+                    for intercom in intercoms:
+                        name = (
+                            intercom.role_name
+                            or intercom.string_view
+                            or intercom.custom_name
+                            or f"Intercom {intercom.id}"
+                        )
+                        intercoms_data.append({"id": intercom.id, "name": name})
+
+                    # Create entry with contract and intercoms
+                    # (no password/token in entry.data)
                     data = {
                         CONF_CONTRACT: contract,
                         "intercoms": intercoms_data,
                     }
                     return self.async_create_entry(title=contract, data=data)
-            except UfanetApiAuthError as err:  # explicit auth errors
-                _LOGGER.warning("Authentication failed: %s", err)
+            except UfanetApiAuthError:  # explicit auth errors
+                _LOGGER.warning("Authentication failed")
                 errors["base"] = "auth"
-            except UfanetApiError as err:  # other API errors
-                _LOGGER.error("API error: %s", err)
+            except UfanetApiError:  # other API errors
+                _LOGGER.exception("API error")
                 errors["base"] = "unknown"
             except Exception as err:  # pragma: no cover - bubble to UI
-                _LOGGER.error("Error validating credentials", exc_info=True)
-                _LOGGER.error("Exception type: %s, message: %s", type(err).__name__, str(err))
+                _LOGGER.exception("Error validating credentials")
 
                 # Extract error message - could be dict, list, or string
                 error_msg = str(err)
-                if isinstance(err.args[0] if err.args else None, dict):
-                    # Try to extract message from dict (e.g., {'non_field_errors': [...]})
-                    error_dict = err.args[0]
+                first_arg = err.args[0] if err.args else None
+                if isinstance(first_arg, dict):
+                    # Try to extract message from dict
+                    # (e.g., {'non_field_errors': [...]})
+                    error_dict = first_arg
                     if "non_field_errors" in error_dict:
                         error_list = error_dict["non_field_errors"]
                         if error_list:
@@ -155,9 +162,11 @@ class UfanetIntercomConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         "decoding signature",
                         "error decoding",
                     ]
-                    # Also check if error dict contains 'detail' with auth-related message
-                    if isinstance(err.args[0] if err.args else None, dict):
-                        error_dict = err.args[0]
+                    # Also check if error dict contains 'detail'
+                    # with auth-related message
+                    first_arg = err.args[0] if err.args else None
+                    if isinstance(first_arg, dict):
+                        error_dict = first_arg
                         if "detail" in error_dict:
                             detail_msg = str(error_dict["detail"]).lower()
                             if any(keyword in detail_msg for keyword in auth_keywords):
@@ -179,6 +188,3 @@ class UfanetIntercomConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             ),
             errors=errors,
         )
-
-
-
