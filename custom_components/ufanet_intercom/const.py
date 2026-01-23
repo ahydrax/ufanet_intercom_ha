@@ -1,8 +1,8 @@
-"""Constants for ufanet_intercom."""
+"""Constants for the Ufanet Intercom integration."""
 
-from logging import Logger, getLogger
+DOMAIN = "ufanet"
+CONF_CONTRACT = "contract"
+CONF_PASSWORD = "password"
+CONF_INTERCOM_ID = "intercom_id"
 
-LOGGER: Logger = getLogger(__package__)
 
-DOMAIN = "ufanet_intercom"
-ATTRIBUTION = "Data provided by http://jsonplaceholder.typicode.com/"

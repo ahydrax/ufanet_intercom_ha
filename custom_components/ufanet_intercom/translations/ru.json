@@ -1,0 +1,35 @@
+{
+  "title": "Ufanet Intercom",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Настройка Ufanet Intercom",
+        "data": {
+          "contract": "Номер договора",
+          "password": "Пароль"
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "Допускается только одна конфигурация."
+    },
+    "error": {
+      "auth": "Неверный логин или пароль.",
+      "unknown": "Неизвестная ошибка. Проверьте логи.",
+      "no_intercoms": "Для этой учетной записи домофоны не найдены."
+    }
+  },
+  "entity": {
+    "button": {
+      "open_intercom": {
+        "name": "Открыть домофон"
+      }
+    },
+    "camera": {
+      "camera": {
+        "name": "Камера"
+      }
+    }
+  }
+}
+

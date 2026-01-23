@@ -1,12 +1,14 @@
 {
-  "domain": "ufanet_intercom",
+  "domain": "ufanet",
   "name": "Ufanet Intercom",
   "codeowners": [
-    "@ludeeus"
+    "@adonixis"
   ],
   "config_flow": true,
+  "version": "0.1.0",
   "documentation": "https://github.com/adonixis/ufanet_intercom_ha",
   "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/adonixis/ufanet_intercom_ha/issues",
-  "version": "0.1.0"
+  "loggers": ["custom_components.ufanet"]
 }
+
