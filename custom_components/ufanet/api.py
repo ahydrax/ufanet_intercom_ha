@@ -6,31 +6,16 @@ import base64
 import json
 import logging
 import time
-from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urljoin
 
+import async_timeout
 from aiohttp import ClientResponseError, ClientSession
 
 _LOGGER = logging.getLogger(__name__)
 
 BASE_URL = "https://dom.ufanet.ru/"
-
-# HTTP Status codes
-HTTP_UNAUTHORIZED = 401
-HTTP_BAD_REQUEST = 400
-
-# JWT constants
-JWT_PARTS_COUNT = 3
-
-# Error messages as constants
-MSG_REFRESH_EXPIRED = "Refresh token expired. Please reconfigure the integration."
-MSG_NO_TOKEN = "No token in response"
-MSG_NO_REFRESH = "No refresh token available"
-MSG_INVALID_REFRESH = "Invalid refresh response"
-MSG_REFRESH_FAILED = "Refresh failed"
-MSG_NO_VALID_TOKEN = "No valid token available. Please reconfigure the integration."
 
 
 class UfanetApiError(Exception):
@@ -76,7 +61,6 @@ class UfanetApiClient:
         refresh_token: str | None = None,
         refresh_exp: int | None = None,
     ) -> None:
-        """Initialize the API client."""
         self._session = session
         self._contract = contract
         self._password = password
@@ -85,9 +69,7 @@ class UfanetApiClient:
         self._refresh_token: str | None = refresh_token
         self._refresh_exp: int | None = refresh_exp
 
-    async def async_get_intercoms(
-        self, on_token_update: Callable[[str, int], None] | None = None
-    ) -> list[IntercomInfo]:
+    async def async_get_intercoms(self, on_token_update=None) -> list[IntercomInfo]:
         """Authenticate (if needed) and get intercom list."""
         await self._ensure_access_token(on_token_update)
         try:
@@ -96,21 +78,20 @@ class UfanetApiClient:
             await self._login(on_token_update)
             data = await self._request("GET", "api/v0/skud/shared/")
 
-        # Use list comprehension for better performance
-        return [
-            IntercomInfo(
-                id=item.get("id"),
-                role_name=item.get("role").get("name"),
-                string_view=item.get("string_view"),
-                custom_name=item.get("custom_name"),
-                address=item.get("address"),
+        intercoms: list[IntercomInfo] = []
+        for item in data or []:
+            intercoms.append(
+                IntercomInfo(
+                    id=item.get("id"),
+                    role_name=item.get("role").get("name"),
+                    string_view=item.get("string_view"),
+                    custom_name=item.get("custom_name"),
+                    address=item.get("address"),
+                )
             )
-            for item in (data or [])
-        ]
+        return intercoms
 
-    async def async_open_intercom(
-        self, intercom_id: int, on_token_update: Callable[[str, int], None] | None = None
-    ) -> bool:
+    async def async_open_intercom(self, intercom_id: int, on_token_update=None) -> bool:
         """Authenticate (if needed) and open an intercom."""
         await self._ensure_access_token(on_token_update)
         try:
@@ -120,28 +101,22 @@ class UfanetApiClient:
             data = await self._request("GET", f"api/v0/skud/shared/{intercom_id}/open/")
         return bool(data and data.get("result"))
 
-    async def async_get_cameras(
-        self, on_token_update: Callable[[str, int], None] | None = None
-    ) -> list[CameraInfo]:
+    async def async_get_cameras(self, on_token_update=None) -> list[CameraInfo]:
         """Get list of cameras with prepared stream info from dom API."""
         await self._ensure_access_token(on_token_update)
         data = await self._request("GET", "api/v1/cctv")
         _LOGGER.debug("Raw camera response type=%s", type(data).__name__)
-
         cameras: list[CameraInfo] = []
         results = data if isinstance(data, list) else []
         _LOGGER.debug("Camera results count=%s", len(results))
-
         for item in results or []:
             servers = item.get("servers", {})
             domain = servers.get("domain")
             screenshot_domain = servers.get("screenshot_domain")
             number = item.get("number")
             token_l = item.get("token_l")
-
             if not (domain and number and token_l):
                 continue
-
             cameras.append(
                 CameraInfo(
                     number=number,
@@ -154,12 +129,12 @@ class UfanetApiClient:
             )
         return cameras
 
-    async def _login(
-        self, on_token_update: Callable[[str, int], None] | None = None
-    ) -> None:
+    async def _login(self, on_token_update=None) -> None:
         """Full login to obtain access and refresh tokens (requires password)."""
         if not self._password:
-            raise UfanetApiAuthError(MSG_REFRESH_EXPIRED)
+            raise UfanetApiAuthError(
+                "Refresh token expired. Please reconfigure the integration."
+            )
 
         data = await self._request(
             "POST",
@@ -167,14 +142,12 @@ class UfanetApiClient:
             json={"contract": self._contract, "password": self._password},
             include_token=False,
         )
-
         token_info = (data or {}).get("token", {}) if isinstance(data, dict) else {}
         access = token_info.get("access")
         refresh = token_info.get("refresh")
         refresh_exp = token_info.get("exp")
-
         if not (access and refresh):
-            raise UfanetApiAuthError(MSG_NO_TOKEN)
+            raise UfanetApiAuthError("No token in response")
 
         self._access_token = access
         self._access_exp = self._extract_exp(access)
@@ -184,12 +157,10 @@ class UfanetApiClient:
         if on_token_update:
             await on_token_update(refresh, refresh_exp)
 
-    async def _refresh_access_token(
-        self, on_token_update: Callable[[str, int], None] | None = None
-    ) -> None:
+    async def _refresh_access_token(self, on_token_update=None) -> None:
         """Refresh access (and refresh) token using refresh token."""
         if not self._refresh_token:
-            raise UfanetApiAuthError(MSG_NO_REFRESH)
+            raise UfanetApiAuthError("No refresh token available")
 
         data = await self._request(
             "POST",
@@ -199,14 +170,13 @@ class UfanetApiClient:
         )
 
         if not isinstance(data, dict):
-            raise UfanetApiAuthError(MSG_INVALID_REFRESH)
+            raise UfanetApiAuthError("Invalid refresh response")
 
         access = data.get("access")
         refresh = data.get("refresh")
         refresh_exp = data.get("exp")
-
         if not (access and refresh):
-            raise UfanetApiAuthError(MSG_REFRESH_FAILED)
+            raise UfanetApiAuthError("Refresh failed")
 
         self._access_token = access
         self._access_exp = self._extract_exp(access)
@@ -217,13 +187,10 @@ class UfanetApiClient:
         if cb:
             await cb(refresh, refresh_exp)
 
-    async def _ensure_access_token(
-        self, on_token_update: Callable[[str, int], None] | None = None
-    ) -> None:
+    async def _ensure_access_token(self, on_token_update=None) -> None:
         """Ensure a valid access token is available."""
         if on_token_update:
             self._token_update_cb = on_token_update
-
         if self._access_token and not self._is_expiring(self._access_exp):
             return
 
@@ -233,11 +200,10 @@ class UfanetApiClient:
         ):
             try:
                 await self._refresh_access_token(on_token_update)
+                return
             except UfanetApiAuthError:
                 # Refresh token expired; will try password below if available
                 pass
-            else:
-                return
 
         # If we have a password (initial login or re-login), attempt full login
         if self._password:
@@ -245,7 +211,9 @@ class UfanetApiClient:
             return
 
         # No refresh token and no password -> require reconfiguration
-        raise UfanetApiAuthError(MSG_NO_VALID_TOKEN)
+        raise UfanetApiAuthError(
+            "No valid token available. Please reconfigure the integration."
+        )
 
     @staticmethod
     def _extract_exp(token: str | None) -> int | None:
@@ -254,12 +222,12 @@ class UfanetApiClient:
             return None
         try:
             parts = token.split(".")
-            if len(parts) != JWT_PARTS_COUNT:
+            if len(parts) != 3:
                 return None
             payload_b64 = parts[1] + "=" * (-len(parts[1]) % 4)
             payload = json.loads(base64.urlsafe_b64decode(payload_b64.encode()))
             return int(payload.get("exp")) if "exp" in payload else None
-        except Exception:  # noqa: BLE001
+        except Exception:
             return None
 
     @staticmethod
@@ -278,12 +246,11 @@ class UfanetApiClient:
         json: dict[str, Any] | None = None,
         params: dict[str, Any] | None = None,
         include_token: bool = True,
+        timeout: int = 30,
         base_url: str = BASE_URL,
         extra_headers: dict[str, str] | None = None,
     ) -> Any:
         """Perform HTTP request with optional JWT token."""
-        import asyncio
-
         headers: dict[str, str] = {}
         if include_token and self._access_token:
             headers["Authorization"] = f"JWT {self._access_token}"
@@ -293,33 +260,34 @@ class UfanetApiClient:
         url = urljoin(base_url, path)
 
         try:
-            async with asyncio.timeout(30), self._session.request(
-                method, url, json=json, params=params, headers=headers
-            ) as resp:
-                text = await resp.text()
-                if resp.status == HTTP_UNAUTHORIZED and include_token:
-                    # Attempt refresh once, then retry
-                    await self._refresh_access_token()
-                    headers["Authorization"] = f"JWT {self._access_token}"
-                    async with self._session.request(
-                        method, url, json=json, params=params, headers=headers
-                    ) as retry_resp:
-                        retry_text = await retry_resp.text()
-                        if retry_resp.status >= HTTP_BAD_REQUEST:
-                            msg = f"{retry_resp.status}: {retry_text}"
-                            raise UfanetApiError(msg)
-                        try:
-                            return await retry_resp.json(content_type=None)
-                        except Exception:  # noqa: BLE001
-                            return retry_text
-                if resp.status >= HTTP_BAD_REQUEST:
-                    msg = f"{resp.status}: {text}"
-                    raise UfanetApiError(msg)
-                try:
-                    return await resp.json(content_type=None)
-                except Exception:  # noqa: BLE001
-                    return text
+            async with async_timeout.timeout(timeout):
+                async with self._session.request(
+                    method, url, json=json, params=params, headers=headers
+                ) as resp:
+                    text = await resp.text()
+                    if resp.status == 401 and include_token:
+                        # Attempt refresh once, then retry
+                        await self._refresh_access_token()
+                        headers["Authorization"] = f"JWT {self._access_token}"
+                        async with self._session.request(
+                            method, url, json=json, params=params, headers=headers
+                        ) as retry_resp:
+                            retry_text = await retry_resp.text()
+                            if retry_resp.status >= 400:
+                                raise UfanetApiError(
+                                    f"{retry_resp.status}: {retry_text}"
+                                )
+                            try:
+                                return await retry_resp.json(content_type=None)
+                            except Exception:
+                                return retry_text
+                    if resp.status >= 400:
+                        raise UfanetApiError(f"{resp.status}: {text}")
+                    try:
+                        return await resp.json(content_type=None)
+                    except Exception:
+                        return text
         except ClientResponseError as err:
-            if err.status == HTTP_UNAUTHORIZED:
+            if err.status == 401:
                 raise UfanetApiAuthError(str(err)) from err
             raise UfanetApiError(str(err)) from err

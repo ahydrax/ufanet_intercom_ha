@@ -2,17 +2,12 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 from homeassistant.components.button import ButtonEntity, ButtonEntityDescription
-
-if TYPE_CHECKING:
-    from homeassistant.config_entries import ConfigEntry
-    from homeassistant.core import HomeAssistant
-    from homeassistant.helpers.entity_platform import AddEntitiesCallback
-
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.entity import DeviceInfo
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .api import UfanetApiClient
 from .const import CONF_CONTRACT, DOMAIN
@@ -35,11 +30,11 @@ class UfanetOpenDoorButton(ButtonEntity):
     _attr_has_entity_name = True
 
     def __init__(self, entry: ConfigEntry, data: dict, intercom: dict) -> None:
-        """Initialize the button."""
         self._entry = entry
         self._contract = data[CONF_CONTRACT]
         self._intercom_id = intercom["id"]
         self._intercom_name = intercom["name"]
+
         self.entity_description = ButtonEntityDescription(
             key=f"open_intercom_{self._intercom_id}",
             translation_key="open_intercom",
@@ -48,7 +43,6 @@ class UfanetOpenDoorButton(ButtonEntity):
 
         self._attr_unique_id = f"{self._contract}_{self._intercom_id}_open"
         self._attr_name = self._intercom_name
-
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, self._contract)},
             name=self._contract,
@@ -87,5 +81,4 @@ class UfanetOpenDoorButton(ButtonEntity):
             refresh_token=data.get("refresh_token"),
             refresh_exp=data.get("refresh_exp"),
         )
-
         await client.async_open_intercom(self._intercom_id, on_token_update=save_token)
