@@ -3,19 +3,25 @@
 from __future__ import annotations
 
 import logging
+from typing import TYPE_CHECKING
 
 import async_timeout
 from homeassistant.components.camera import Camera, CameraEntityFeature
-from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+
+if TYPE_CHECKING:
+    from homeassistant.config_entries import ConfigEntry
+    from homeassistant.core import HomeAssistant
+    from homeassistant.helpers.entity_platform import AddEntitiesCallback
+
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.entity import DeviceInfo
-from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .api import CameraInfo, UfanetApiAuthError, UfanetApiClient, UfanetApiError
 from .const import CONF_CONTRACT, DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
+
+HTTP_OK = 200
 
 
 async def async_setup_entry(
@@ -58,26 +64,23 @@ async def async_setup_entry(
         _LOGGER.debug(
             "Successfully loaded %d cameras for contract %s", len(cameras), contract
         )
-    except UfanetApiAuthError as err:
-        _LOGGER.error(
-            "Authentication failed while loading cameras for contract %s: %s. "
+    except UfanetApiAuthError:
+        _LOGGER.exception(
+            "Authentication failed while loading cameras for contract %s. "
             "Please reconfigure the integration.",
             contract,
-            err,
         )
         cameras = []
-    except UfanetApiError as err:
-        _LOGGER.error(
-            "API error while loading cameras for contract %s: %s",
-            contract,
-            err,
-        )
-        cameras = []
-    except Exception as err:
+    except UfanetApiError:
         _LOGGER.exception(
-            "Unexpected error while loading cameras for contract %s: %s",
+            "API error while loading cameras for contract %s",
             contract,
-            err,
+        )
+        cameras = []
+    except Exception:
+        _LOGGER.exception(
+            "Unexpected error while loading cameras for contract %s",
+            contract,
         )
         cameras = []
 
@@ -103,12 +106,14 @@ class UfanetCamera(Camera):
         hass: HomeAssistant,
         client: UfanetApiClient,
     ) -> None:
+        """Initialize the camera."""
         super().__init__()
         self._entry = entry
         self._cam = cam
         self._hass = hass
         self._client = client
-        self._token_exp: int | None = UfanetApiClient._extract_exp(cam.token_l)
+        # Use public method instead of private
+        self._token_exp: int | None = self._extract_token_exp(cam.token_l)
         self._attr_unique_id = f"{entry.entry_id}_{cam.number}"
         self._attr_name = cam.title or cam.address or cam.number
         self._update_urls()
@@ -118,13 +123,40 @@ class UfanetCamera(Camera):
             manufacturer="Ufanet",
         )
 
+    def _extract_token_exp(self, token: str) -> int | None:
+        """Extract expiration from token."""
+        import base64
+        import json
+
+        if not token:
+            return None
+        try:
+            parts = token.split(".")
+            if len(parts) != 3:  # noqa: PLR2004
+                return None
+            payload_b64 = parts[1] + "=" * (-len(parts[1]) % 4)
+            payload = json.loads(base64.urlsafe_b64decode(payload_b64.encode()))
+            return int(payload.get("exp")) if "exp" in payload else None
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _is_token_expiring(self, exp: int | None, skew_seconds: int = 60) -> bool:
+        """Check if token is close to expiration."""
+        import time
+
+        if exp is None:
+            return True
+        now = int(time.time())
+        return now >= (exp - skew_seconds)
+
     def _update_urls(self) -> None:
         """Update stream and screenshot URLs based on current camera info."""
         self._stream_url = (
             f"rtsp://{self._cam.domain}/{self._cam.number}?token={self._cam.token_l}"
         )
         self._screenshot_url = (
-            f"https://{self._cam.screenshot_domain}/api/v0/screenshots/{self._cam.number}~600.jpg?token={self._cam.token_l}"
+            f"https://{self._cam.screenshot_domain}/api/v0/screenshots/"
+            f"{self._cam.number}~600.jpg?token={self._cam.token_l}"
             if self._cam.screenshot_domain
             else None
         )
@@ -132,26 +164,24 @@ class UfanetCamera(Camera):
     async def _refresh_camera_token_if_needed(self) -> None:
         """Refresh camera token_l if it is close to expiration."""
         # If we know exp and it is not expiring soon, do nothing
-        if self._token_exp is not None and not UfanetApiClient._is_expiring(
+        if self._token_exp is not None and not self._is_token_expiring(
             self._token_exp
         ):
             return
 
         try:
             cameras = await self._client.async_get_cameras()
-        except UfanetApiAuthError as err:
+        except UfanetApiAuthError:
             _LOGGER.warning(
-                "Authentication failed while refreshing camera token for %s: %s",
+                "Authentication failed while refreshing camera token for %s",
                 self._attr_name,
-                err,
             )
             # If refresh fails, keep using existing URLs
             return
-        except Exception as err:
+        except Exception:  # noqa: BLE001
             _LOGGER.warning(
-                "Error refreshing camera token for %s: %s",
+                "Error refreshing camera token for %s",
                 self._attr_name,
-                err,
             )
             # If refresh fails, keep using existing URLs
             return
@@ -159,7 +189,7 @@ class UfanetCamera(Camera):
         for cam in cameras:
             if cam.number == self._cam.number:
                 self._cam = cam
-                self._token_exp = UfanetApiClient._extract_exp(cam.token_l)
+                self._token_exp = self._extract_token_exp(cam.token_l)
                 self._update_urls()
                 _LOGGER.debug("Refreshed token for camera %s", self._attr_name)
                 break
@@ -171,17 +201,17 @@ class UfanetCamera(Camera):
             )
 
     @property
-    def unique_id(self):
+    def unique_id(self) -> str:
         """Return a unique ID."""
         return self._attr_unique_id
 
     @property
-    def name(self):
+    def name(self) -> str:
         """Return the name of this camera."""
         return self._attr_name
 
     @property
-    def supported_features(self):
+    def supported_features(self) -> CameraEntityFeature:
         """Return supported features."""
         return CameraEntityFeature.STREAM
 
@@ -196,19 +226,21 @@ class UfanetCamera(Camera):
         return self._stream_url
 
     async def async_camera_image(
-        self, width: int | None = None, height: int | None = None
+        self, width: int | None = None, height: int | None = None  # noqa: ARG002
     ) -> bytes | None:
         """Return a still image from the camera."""
         if not self._screenshot_url:
             return None
 
         await self._refresh_camera_token_if_needed()
-
         session = async_get_clientsession(self._hass)
         try:
-            async with async_timeout.timeout(10):
-                async with session.get(self._screenshot_url) as resp:
-                    if resp.status == 200:
-                        return await resp.read()
-        except Exception:
+            async with (
+                async_timeout.timeout(10),
+                session.get(self._screenshot_url) as resp,
+            ):
+                if resp.status == HTTP_OK:
+                    return await resp.read()
+        except Exception:  # noqa: BLE001
             return None
+        return None

@@ -2,5 +2,5 @@
 
 DOMAIN = "ufanet"
 CONF_CONTRACT = "contract"
-CONF_PASSWORD = "password"
+CONF_PASSWORD = "password"  # noqa: S105
 CONF_INTERCOM_ID = "intercom_id"

@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
-from homeassistant.config_entries import ConfigEntry
+from typing import TYPE_CHECKING
+
 from homeassistant.const import Platform
-from homeassistant.core import HomeAssistant
+
+if TYPE_CHECKING:
+    from homeassistant.config_entries import ConfigEntry
+    from homeassistant.core import HomeAssistant
+
 from homeassistant.helpers.storage import Store
 
 from .const import CONF_CONTRACT, DOMAIN
@@ -15,7 +20,7 @@ STORAGE_VERSION = 1
 PLATFORMS: list[Platform] = [Platform.BUTTON, Platform.CAMERA]
 
 
-async def async_setup(hass: HomeAssistant, config: dict) -> bool:
+async def async_setup(_hass: HomeAssistant, _config: dict) -> bool:
     """Set up the integration from yaml (not supported)."""
     return True
 
@@ -32,6 +37,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     # Prepare data for platforms (credentials from secure storage, rest from entry.data)
     platform_data = dict(entry.data)
+
     # Add credentials from secure storage
     platform_data["refresh_token"] = credentials.get("refresh_token")
     platform_data["refresh_exp"] = credentials.get("refresh_exp")
@@ -39,7 +45,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     platform_data["_contract"] = contract
 
     hass.data[DOMAIN][entry.entry_id] = platform_data
+
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+
     return True
 
 

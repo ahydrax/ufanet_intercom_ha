@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import voluptuous as vol
 from homeassistant import config_entries
-from homeassistant.data_entry_flow import FlowResult
+
+if TYPE_CHECKING:
+    from homeassistant.data_entry_flow import FlowResult
+
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.storage import Store
 
@@ -18,6 +21,57 @@ STORAGE_KEY = f"{DOMAIN}_credentials"
 STORAGE_VERSION = 1
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _is_auth_error(error_msg: str, exception_name: str) -> bool:
+    """Check if error message or exception name indicates authentication failure."""
+    error_msg_lower = error_msg.lower()
+    exception_name_lower = exception_name.lower()
+
+    # Explicit auth errors
+    if "unauthorized" in exception_name_lower:
+        return True
+
+    # Auth-related keywords
+    auth_keywords = [
+        "невозможно войти",
+        "учетными данными",
+        "неверный",
+        "неправильный",
+        "invalid",
+        "auth",
+        "login",
+        "password",
+        "unauthorized",
+        "forbidden",
+        "401",
+        "403",
+        "decoding signature",
+        "error decoding",
+    ]
+
+    return any(keyword in error_msg_lower for keyword in auth_keywords)
+
+
+def _extract_error_message(err: Exception) -> str:
+    """Extract error message from exception."""
+    error_msg = str(err)
+
+    if isinstance(err.args[0] if err.args else None, dict):
+        # Try to extract message from dict
+        error_dict = err.args[0]
+        if "non_field_errors" in error_dict:
+            error_list = error_dict["non_field_errors"]
+            if error_list:
+                return " ".join(str(e) for e in error_list)
+        if "detail" in error_dict:
+            return str(error_dict["detail"])
+        return str(error_dict)
+
+    if err.args:
+        return str(err.args[0])
+
+    return error_msg
 
 
 class UfanetIntercomConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -62,118 +116,19 @@ class UfanetIntercomConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 await store.async_save(stored_data)
 
             try:
-                _LOGGER.debug("Requesting intercom list")
-                intercoms = await client.async_get_intercoms(on_token_update=save_token)
-                _LOGGER.debug("Fetched %s intercoms", len(intercoms))
-
-                if not intercoms:
-                    errors["base"] = "no_intercoms"
-                else:
-                    # Save all intercoms as a list
-                    intercoms_data = [
-                        {
-                            "id": intercom.id,
-                            "name": intercom.role_name
-                            or intercom.string_view
-                            or intercom.custom_name
-                            or f"Intercom {intercom.id}",
-                        }
-                        for intercom in intercoms
-                    ]
-
-                    # Create entry with contract and intercoms (no password/token in entry.data)
-                    data = {
-                        CONF_CONTRACT: contract,
-                        "intercoms": intercoms_data,
-                    }
-                    return self.async_create_entry(title=contract, data=data)
-            except UfanetApiAuthError as err:  # explicit auth errors
+                errors = await self._validate_and_create_entry(
+                    client, save_token, contract
+                )
+                if not errors:
+                    return errors  # This is actually FlowResult from create_entry
+            except UfanetApiAuthError as err:
                 _LOGGER.warning("Authentication failed: %s", err)
                 errors["base"] = "auth"
-            except UfanetApiError as err:  # other API errors
-                _LOGGER.error("API error: %s", err)
+            except UfanetApiError:
+                _LOGGER.exception("API error during authentication")
                 errors["base"] = "unknown"
-            except Exception as err:  # pragma: no cover - bubble to UI
-                _LOGGER.error("Error validating credentials", exc_info=True)
-                _LOGGER.error(
-                    "Exception type: %s, message: %s", type(err).__name__, str(err)
-                )
-
-                # Extract error message - could be dict, list, or string
-                error_msg = str(err)
-                if isinstance(err.args[0] if err.args else None, dict):
-                    # Try to extract message from dict (e.g., {'non_field_errors': [...]})
-                    error_dict = err.args[0]
-                    if "non_field_errors" in error_dict:
-                        error_list = error_dict["non_field_errors"]
-                        if error_list:
-                            error_msg = " ".join(str(e) for e in error_list)
-                    else:
-                        error_msg = str(error_dict)
-                elif err.args:
-                    error_msg = str(err.args[0])
-
-                error_msg_lower = error_msg.lower()
-
-                # Check exception type name
-                exception_name = type(err).__name__.lower()
-
-                # Explicit auth errors
-                if "unauthorized" in exception_name:
-                    _LOGGER.warning("Unauthorized error: %s", error_msg)
-                    errors["base"] = "auth"
-                # Timeout/unknown errors - check if message indicates auth failure
-                elif "timeout" in exception_name or "unknown" in exception_name:
-                    auth_keywords = [
-                        "невозможно войти",
-                        "учетными данными",
-                        "неверный",
-                        "неправильный",
-                        "invalid",
-                        "auth",
-                        "login",
-                        "password",
-                        "unauthorized",
-                        "forbidden",
-                        "401",
-                        "403",
-                        "decoding signature",
-                        "error decoding",
-                    ]
-                    if any(keyword in error_msg_lower for keyword in auth_keywords):
-                        _LOGGER.warning("Authentication failed: %s", error_msg)
-                        errors["base"] = "auth"
-                    else:
-                        errors["base"] = "unknown"
-                # Other exceptions - check message for auth-related keywords
-                else:
-                    auth_keywords = [
-                        "auth",
-                        "login",
-                        "password",
-                        "unauthorized",
-                        "forbidden",
-                        "401",
-                        "403",
-                        "timeout",
-                        "невозможно войти",
-                        "учетными данными",
-                        "decoding signature",
-                        "error decoding",
-                    ]
-                    # Also check if error dict contains 'detail' with auth-related message
-                    if isinstance(err.args[0] if err.args else None, dict):
-                        error_dict = err.args[0]
-                        if "detail" in error_dict:
-                            detail_msg = str(error_dict["detail"]).lower()
-                            if any(keyword in detail_msg for keyword in auth_keywords):
-                                errors["base"] = "auth"
-                            else:
-                                errors["base"] = "unknown"
-                    elif any(keyword in error_msg_lower for keyword in auth_keywords):
-                        errors["base"] = "auth"
-                    else:
-                        errors["base"] = "unknown"
+            except Exception:
+                errors = self._handle_generic_exception()
 
         return self.async_show_form(
             step_id="user",
@@ -185,3 +140,60 @@ class UfanetIntercomConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             ),
             errors=errors,
         )
+
+    async def _validate_and_create_entry(
+        self,
+        client: UfanetApiClient,
+        save_token: callable,
+        contract: str,
+    ) -> dict[str, str] | FlowResult:
+        """Validate credentials and create config entry."""
+        _LOGGER.debug("Requesting intercom list")
+        intercoms = await client.async_get_intercoms(on_token_update=save_token)
+        _LOGGER.debug("Fetched %s intercoms", len(intercoms))
+
+        if not intercoms:
+            return {"base": "no_intercoms"}
+
+        # Save all intercoms as a list
+        intercoms_data = [
+            {
+                "id": intercom.id,
+                "name": intercom.role_name
+                or intercom.string_view
+                or intercom.custom_name
+                or f"Intercom {intercom.id}",
+            }
+            for intercom in intercoms
+        ]
+
+        # Create entry with contract and intercoms
+        # (no password/token in entry.data)
+        data = {
+            CONF_CONTRACT: contract,
+            "intercoms": intercoms_data,
+        }
+
+        return self.async_create_entry(title=contract, data=data)
+
+    def _handle_generic_exception(self) -> dict[str, str]:
+        """Handle generic exceptions and determine error type."""
+        import sys
+
+        err = sys.exc_info()[1]
+
+        _LOGGER.exception("Error validating credentials")
+        _LOGGER.error(
+            "Exception type: %s, message: %s", type(err).__name__, str(err)
+        )
+
+        # Extract error message
+        error_msg = _extract_error_message(err)
+        exception_name = type(err).__name__
+
+        # Check if it's an auth error
+        if _is_auth_error(error_msg, exception_name):
+            _LOGGER.warning("Authentication failed: %s", error_msg)
+            return {"base": "auth"}
+
+        return {"base": "unknown"}
