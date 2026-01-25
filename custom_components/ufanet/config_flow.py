@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 from typing import TYPE_CHECKING, Any
 
 import voluptuous as vol
@@ -19,8 +18,6 @@ if TYPE_CHECKING:
 STORAGE_KEY = f"{DOMAIN}_credentials"
 STORAGE_VERSION = 1
 
-_LOGGER = logging.getLogger(__name__)
-
 
 class UfanetIntercomConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Ufanet Intercom."""
@@ -36,8 +33,6 @@ class UfanetIntercomConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             contract = user_input[CONF_CONTRACT]
             password = user_input[CONF_PASSWORD]
-
-            _LOGGER.debug("Starting authentication for contract: %s", contract)
 
             await self.async_set_unique_id(contract)
             self._abort_if_unique_id_configured()
@@ -64,9 +59,7 @@ class UfanetIntercomConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 await store.async_save(stored_data)
 
             try:
-                _LOGGER.debug("Requesting intercom list")
                 intercoms = await client.async_get_intercoms(on_token_update=save_token)
-                _LOGGER.debug("Fetched %s intercoms", len(intercoms))
 
                 if not intercoms:
                     errors["base"] = "no_intercoms"
@@ -90,14 +83,10 @@ class UfanetIntercomConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     }
                     return self.async_create_entry(title=contract, data=data)
             except UfanetApiAuthError:  # explicit auth errors
-                _LOGGER.warning("Authentication failed")
                 errors["base"] = "auth"
             except UfanetApiError:  # other API errors
-                _LOGGER.exception("API error")
                 errors["base"] = "unknown"
             except Exception as err:  # pragma: no cover - bubble to UI
-                _LOGGER.exception("Error validating credentials")
-
                 # Extract error message - could be dict, list, or string
                 error_msg = str(err)
                 first_arg = err.args[0] if err.args else None
@@ -121,7 +110,6 @@ class UfanetIntercomConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
                 # Explicit auth errors
                 if "unauthorized" in exception_name:
-                    _LOGGER.warning("Unauthorized error: %s", error_msg)
                     errors["base"] = "auth"
                 # Timeout/unknown errors - check if message indicates auth failure
                 elif "timeout" in exception_name or "unknown" in exception_name:
@@ -142,7 +130,6 @@ class UfanetIntercomConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         "error decoding",
                     ]
                     if any(keyword in error_msg_lower for keyword in auth_keywords):
-                        _LOGGER.warning("Authentication failed: %s", error_msg)
                         errors["base"] = "auth"
                     else:
                         errors["base"] = "unknown"
