@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import base64
 import json
-import logging
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -16,8 +15,6 @@ from aiohttp import ClientResponseError, ClientSession
 
 if TYPE_CHECKING:
     from typing import Any
-
-_LOGGER = logging.getLogger(__name__)
 
 BASE_URL = "https://dom.ufanet.ru/"
 
@@ -140,10 +137,8 @@ class UfanetApiClient:
         """Get list of cameras with prepared stream info from dom API."""
         await self._ensure_access_token(on_token_update)
         data = await self._request("GET", "api/v1/cctv")
-        _LOGGER.debug("Raw camera response type=%s", type(data).__name__)
         cameras: list[CameraInfo] = []
         results = data if isinstance(data, list) else []
-        _LOGGER.debug("Camera results count=%s", len(results))
         for item in results or []:
             servers = item.get("servers", {})
             domain = servers.get("domain")

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 from typing import TYPE_CHECKING
 
 import async_timeout
@@ -17,8 +16,6 @@ if TYPE_CHECKING:
     from homeassistant.config_entries import ConfigEntry
     from homeassistant.core import HomeAssistant
     from homeassistant.helpers.entity_platform import AddEntitiesCallback
-
-_LOGGER = logging.getLogger(__name__)
 
 
 async def async_setup_entry(
@@ -58,39 +55,19 @@ async def async_setup_entry(
 
     try:
         cameras = await client.async_get_cameras(on_token_update=save_token)
-        _LOGGER.debug(
-            "Successfully loaded %d cameras for contract %s", len(cameras), contract
-        )
     except UfanetApiAuthError:
-        _LOGGER.exception(
-            "Authentication failed while loading cameras for contract %s. "
-            "Please reconfigure the integration.",
-            contract,
-        )
         cameras = []
     except UfanetApiError:
-        _LOGGER.exception(
-            "API error while loading cameras for contract %s",
-            contract,
-        )
         cameras = []
     except Exception:
-        _LOGGER.exception(
-            "Unexpected error while loading cameras for contract %s",
-            contract,
-        )
         cameras = []
 
     if not cameras:
-        _LOGGER.warning("No cameras found for contract %s", contract)
         return
 
     # Create camera entity for each camera in the list, sharing a single API client
     entities = [UfanetCamera(entry, cam, hass, client) for cam in cameras]
     async_add_entities(entities, update_before_add=True)
-    _LOGGER.info(
-        "Successfully set up %d cameras for contract %s", len(entities), contract
-    )
 
 
 class UfanetCamera(Camera):
@@ -116,12 +93,6 @@ class UfanetCamera(Camera):
         self._stream_url = ""
         self._screenshot_url: str | None = None
         self._update_urls()
-        _LOGGER.debug(
-            "Initialized camera %s: screenshot_domain=%s, screenshot_url=%s",
-            self._attr_name,
-            cam.screenshot_domain,
-            self._screenshot_url,
-        )
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, entry.data.get(CONF_CONTRACT))},
             name=entry.data.get(CONF_CONTRACT),
@@ -138,17 +109,8 @@ class UfanetCamera(Camera):
                 f"https://{self._cam.screenshot_domain}/api/v0/screenshots/"
                 f"{self._cam.number}~600.jpg?token={self._cam.token_l}"
             )
-            _LOGGER.debug(
-                "Updated screenshot URL for camera %s: %s",
-                self._attr_name,
-                self._screenshot_url,
-            )
         else:
             self._screenshot_url = None
-            _LOGGER.debug(
-                "No screenshot domain for camera %s, screenshot URL set to None",
-                self._attr_name,
-            )
 
     async def _refresh_camera_token_if_needed(self) -> None:
         """Refresh camera token_l if it is close to expiration."""
@@ -161,17 +123,9 @@ class UfanetCamera(Camera):
         try:
             cameras = await self._client.async_get_cameras()
         except UfanetApiAuthError:
-            _LOGGER.warning(
-                "Authentication failed while refreshing camera token for %s",
-                self._attr_name,
-            )
             # If refresh fails, keep using existing URLs
             return
         except Exception:  # noqa: BLE001
-            _LOGGER.warning(
-                "Error refreshing camera token for %s",
-                self._attr_name,
-            )
             # If refresh fails, keep using existing URLs
             return
 
@@ -180,14 +134,7 @@ class UfanetCamera(Camera):
                 self._cam = cam
                 self._token_exp = UfanetApiClient.extract_exp(cam.token_l)
                 self._update_urls()
-                _LOGGER.debug("Refreshed token for camera %s", self._attr_name)
                 break
-        else:
-            _LOGGER.warning(
-                "Camera %s (number: %s) not found in refreshed camera list",
-                self._attr_name,
-                self._cam.number,
-            )
 
     @property
     def unique_id(self) -> str:
@@ -220,44 +167,17 @@ class UfanetCamera(Camera):
         height: int | None = None,  # noqa: ARG002
     ) -> bytes | None:
         """Return a still image from the camera."""
-        _LOGGER.info(
-            "async_camera_image called for camera %s (screenshot_url=%s)",
-            self._attr_name,
-            self._screenshot_url,
-        )
         await self._refresh_camera_token_if_needed()
 
         if not self._screenshot_url:
-            _LOGGER.debug(
-                "No screenshot URL for camera %s, cannot get image", self._attr_name
-            )
             return None
-
-        _LOGGER.debug(
-            "Fetching camera image for %s from %s",
-            self._attr_name,
-            self._screenshot_url,
-        )
         session = async_get_clientsession(self._hass)
         try:
             async with async_timeout.timeout(10):  # noqa: SIM117
                 async with session.get(self._screenshot_url) as resp:
                     if resp.status == 200:  # noqa: PLR2004
                         image_data = await resp.read()
-                        _LOGGER.debug(
-                            "Successfully fetched image for %s, size: %d bytes",
-                            self._attr_name,
-                            len(image_data),
-                        )
                         return image_data
-                    _LOGGER.warning(
-                        "Failed to get camera image for %s: HTTP status %s",
-                        self._attr_name,
-                        resp.status,
-                    )
                     return None
-        except Exception as err:  # noqa: BLE001
-            _LOGGER.warning(
-                "Error getting camera image for %s: %s", self._attr_name, err
-            )
+        except Exception:  # noqa: BLE001
             return None
