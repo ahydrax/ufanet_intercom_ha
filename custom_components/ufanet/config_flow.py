@@ -54,8 +54,6 @@ class UfanetIntercomConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     stored_data[contract] = {}
                 stored_data[contract]["refresh_token"] = token
                 stored_data[contract]["refresh_exp"] = exp
-                # Also save password for re-authentication if refresh token expires
-                stored_data[contract]["password"] = password
                 await store.async_save(stored_data)
 
             try:
@@ -173,5 +171,59 @@ class UfanetIntercomConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     vol.Required(CONF_PASSWORD): str,
                 }
             ),
+            errors=errors,
+        )
+
+    async def async_step_reauth(self, entry_data: dict[str, Any]) -> FlowResult:
+        """Handle reauth when refresh token has expired."""
+        self._reauth_contract = entry_data[CONF_CONTRACT]
+        return await self.async_step_reauth_confirm()
+
+    async def async_step_reauth_confirm(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Show form for re-entering password."""
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            contract = self._reauth_contract
+            password = user_input[CONF_PASSWORD]
+
+            session = async_get_clientsession(self.hass)
+            client = UfanetApiClient(session, contract, password=password)
+
+            store = Store(self.hass, STORAGE_VERSION, STORAGE_KEY)
+            stored_data = await store.async_load() or {}
+
+            async def save_token(token: str, exp: int) -> None:
+                if contract not in stored_data:
+                    stored_data[contract] = {}
+                stored_data[contract]["refresh_token"] = token
+                stored_data[contract]["refresh_exp"] = exp
+                await store.async_save(stored_data)
+
+            try:
+                await client.async_get_intercoms(on_token_update=save_token)
+            except UfanetApiAuthError:
+                errors["base"] = "auth"
+            except UfanetApiError:
+                errors["base"] = "unknown"
+            except Exception:  # noqa: BLE001
+                errors["base"] = "unknown"
+            else:
+                reauth_entry = self._get_reauth_entry()
+                return self.async_update_reload_and_abort(
+                    reauth_entry,
+                    reason="reauth_successful",
+                )
+
+        return self.async_show_form(
+            step_id="reauth_confirm",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(CONF_PASSWORD): str,
+                }
+            ),
+            description_placeholders={"contract": self._reauth_contract},
             errors=errors,
         )
