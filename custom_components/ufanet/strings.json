@@ -8,10 +8,18 @@
           "contract": "Contract number",
           "password": "Password"
         }
+      },
+      "reauth_confirm": {
+        "title": "Re-authenticate Ufanet Intercom",
+        "description": "The session has expired. Please re-enter your password for contract {contract}.",
+        "data": {
+          "password": "Password"
+        }
       }
     },
     "abort": {
-      "already_configured": "Only one configuration instance is allowed."
+      "already_configured": "Only one configuration instance is allowed.",
+      "reauth_successful": "Re-authentication successful."
     },
     "error": {
       "auth": "Invalid login or password.",

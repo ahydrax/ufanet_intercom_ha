@@ -5,10 +5,11 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from homeassistant.components.button import ButtonEntity, ButtonEntityDescription
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.entity import DeviceInfo
 
-from .api import UfanetApiClient
+from .api import UfanetApiAuthError, UfanetApiClient
 from .const import CONF_CONTRACT, DOMAIN
 
 if TYPE_CHECKING:
@@ -72,18 +73,17 @@ class UfanetOpenDoorButton(ButtonEntity):
                 stored_data[contract]["refresh_exp"] = exp
                 await store.async_save(stored_data)
 
-        # Try to get password from secure storage for re-authentication if needed
-        password = None
-        if store and contract:
-            stored_data = await store.async_load() or {}
-            credentials = stored_data.get(contract, {})
-            password = credentials.get("password")
-
         client = UfanetApiClient(
             session,
             self._contract,
-            password=password,
             refresh_token=data.get("refresh_token"),
             refresh_exp=data.get("refresh_exp"),
         )
-        await client.async_open_intercom(self._intercom_id, on_token_update=save_token)
+        try:
+            await client.async_open_intercom(
+                self._intercom_id, on_token_update=save_token
+            )
+        except UfanetApiAuthError as err:
+            self._entry.async_start_reauth(self.hass)
+            msg = "Authentication failed. Please re-authenticate the integration."
+            raise HomeAssistantError(msg) from err

@@ -34,6 +34,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     stored_data = await store.async_load() or {}
     credentials = stored_data.get(contract, {})
 
+    # Migration: remove stored password if present (no longer persisted)
+    if "password" in credentials:
+        del credentials["password"]
+        stored_data[contract] = credentials
+        await store.async_save(stored_data)
+
     # Prepare data for platforms (credentials from secure storage, rest from entry.data)
     platform_data = dict(entry.data)
     # Add credentials from secure storage

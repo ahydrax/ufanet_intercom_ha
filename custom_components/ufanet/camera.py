@@ -38,17 +38,9 @@ async def async_setup_entry(
             stored_data[contract]["refresh_exp"] = exp
             await store.async_save(stored_data)
 
-    # Try to get password from secure storage for re-authentication if needed
-    password = None
-    if store and contract:
-        stored_data = await store.async_load() or {}
-        credentials = stored_data.get(contract, {})
-        password = credentials.get("password")
-
     client = UfanetApiClient(
         session,
         data[CONF_CONTRACT],
-        password=password,
         refresh_token=data.get("refresh_token"),
         refresh_exp=data.get("refresh_exp"),
     )
@@ -56,6 +48,7 @@ async def async_setup_entry(
     try:
         cameras = await client.async_get_cameras(on_token_update=save_token)
     except UfanetApiAuthError:
+        entry.async_start_reauth(hass)
         cameras = []
     except UfanetApiError:
         cameras = []
@@ -123,7 +116,7 @@ class UfanetCamera(Camera):
         try:
             cameras = await self._client.async_get_cameras()
         except UfanetApiAuthError:
-            # If refresh fails, keep using existing URLs
+            self._entry.async_start_reauth(self._hass)
             return
         except Exception:  # noqa: BLE001
             # If refresh fails, keep using existing URLs
