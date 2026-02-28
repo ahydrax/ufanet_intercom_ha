@@ -174,9 +174,7 @@ class UfanetIntercomConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             errors=errors,
         )
 
-    async def async_step_reauth(
-        self, entry_data: dict[str, Any]
-    ) -> FlowResult:
+    async def async_step_reauth(self, entry_data: dict[str, Any]) -> FlowResult:
         """Handle reauth when refresh token has expired."""
         self._reauth_contract = entry_data[CONF_CONTRACT]
         return await self.async_step_reauth_confirm()
